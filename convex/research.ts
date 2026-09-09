@@ -27,8 +27,8 @@ const verdictEnum = z.enum([
 export const decompose = internalAction({
   args: { caseId: v.id("cases") },
   returns: v.array(v.id("subclaims")),
-  handler: async (ctx, { caseId }) => {
-    const c = await ctx.runQuery(internal.cases.getInternal, { caseId });
+  handler: async (ctx, { caseId }): Promise<Id<"subclaims">[]> => {
+    const c: Doc<"cases"> | null = await ctx.runQuery(internal.cases.getInternal, { caseId });
     if (!c) throw new Error("case not found");
     await ctx.runMutation(internal.cases.setStatus, { caseId, status: "decomposing" });
 
@@ -56,7 +56,7 @@ export const decompose = internalAction({
     );
     if (!output) throw new Error("Clerk returned no output");
 
-    const ids = await ctx.runMutation(internal.cases.insertSubclaims, {
+    const ids: Id<"subclaims">[] = await ctx.runMutation(internal.cases.insertSubclaims, {
       caseId,
       subclaims: output.subclaims,
     });
@@ -83,9 +83,9 @@ type Fetched = {
 export const research = internalAction({
   args: { caseId: v.id("cases"), subclaimId: v.id("subclaims") },
   returns: v.null(),
-  handler: async (ctx, { caseId, subclaimId }) => {
-    const c = await ctx.runQuery(internal.cases.getInternal, { caseId });
-    const sub = await ctx.runQuery(internal.cases.getSubclaim, { subclaimId });
+  handler: async (ctx, { caseId, subclaimId }): Promise<null> => {
+    const c: Doc<"cases"> | null = await ctx.runQuery(internal.cases.getInternal, { caseId });
+    const sub: Doc<"subclaims"> | null = await ctx.runQuery(internal.cases.getSubclaim, { subclaimId });
     if (!c || !sub) throw new Error("case or subclaim not found");
     await ctx.runMutation(internal.cases.setSubclaimStatus, {
       subclaimId,
@@ -286,11 +286,13 @@ function exhibitsBlock(exhibits: Doc<"exhibits">[]) {
 export const judgeSubclaim = internalAction({
   args: { caseId: v.id("cases"), subclaimId: v.id("subclaims") },
   returns: v.null(),
-  handler: async (ctx, { caseId, subclaimId }) => {
-    const c = await ctx.runQuery(internal.cases.getInternal, { caseId });
-    const sub = await ctx.runQuery(internal.cases.getSubclaim, { subclaimId });
+  handler: async (ctx, { caseId, subclaimId }): Promise<null> => {
+    const c: Doc<"cases"> | null = await ctx.runQuery(internal.cases.getInternal, { caseId });
+    const sub: Doc<"subclaims"> | null = await ctx.runQuery(internal.cases.getSubclaim, { subclaimId });
     if (!c || !sub) throw new Error("case or subclaim not found");
-    const exhibits = await ctx.runQuery(internal.cases.exhibitsForSubclaim, { subclaimId });
+    const exhibits: Doc<"exhibits">[] = await ctx.runQuery(internal.cases.exhibitsForSubclaim, {
+      subclaimId,
+    });
 
     const { output } = await judge.generateText(
       ctx,
@@ -326,11 +328,14 @@ export const judgeSubclaim = internalAction({
 export const synthesize = internalAction({
   args: { caseId: v.id("cases") },
   returns: v.null(),
-  handler: async (ctx, { caseId }) => {
-    const c = await ctx.runQuery(internal.cases.getInternal, { caseId });
+  handler: async (ctx, { caseId }): Promise<null> => {
+    const c: Doc<"cases"> | null = await ctx.runQuery(internal.cases.getInternal, { caseId });
     if (!c) throw new Error("case not found");
     await ctx.runMutation(internal.cases.setStatus, { caseId, status: "judging" });
-    const subs = await ctx.runQuery(internal.cases.subclaimsWithRulings, { caseId });
+    const subs: Array<Doc<"subclaims"> & { ruling: Doc<"rulings"> | null }> = await ctx.runQuery(
+      internal.cases.subclaimsWithRulings,
+      { caseId },
+    );
 
     const block = subs
       .map(

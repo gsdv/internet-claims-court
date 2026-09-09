@@ -74,15 +74,15 @@ export const getDocket = query({
     const subclaims = await ctx.db
       .query("subclaims")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
-      .collect();
+      .take(20);
     const exhibits = await ctx.db
       .query("exhibits")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
-      .collect();
+      .take(200);
     const rulings = await ctx.db
       .query("rulings")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
-      .collect();
+      .take(200);
     const events = await ctx.db
       .query("events")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
@@ -129,7 +129,7 @@ export const exhibitsForSubclaim = internalQuery({
     ctx.db
       .query("exhibits")
       .withIndex("by_subclaim", (q) => q.eq("subclaimId", subclaimId))
-      .collect(),
+      .take(50),
 });
 
 export const subclaimsWithRulings = internalQuery({
@@ -138,7 +138,7 @@ export const subclaimsWithRulings = internalQuery({
     const subs = await ctx.db
       .query("subclaims")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
-      .collect();
+      .take(20);
     return Promise.all(
       subs.map(async (s) => {
         const ruling = await ctx.db

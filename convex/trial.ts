@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { WorkflowManager, vWorkflowId, vResultValidator } from "@convex-dev/workflow";
 import { components, internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 export const trialWorkflow = new WorkflowManager(components.workflow, {
   workpoolOptions: {
@@ -17,7 +18,7 @@ export const trialWorkflow = new WorkflowManager(components.workflow, {
 export const trial = trialWorkflow.define({
   args: { caseId: v.id("cases") },
   handler: async (step, { caseId }): Promise<void> => {
-    const subclaimIds = await step.runAction(
+    const subclaimIds: Id<"subclaims">[] = await step.runAction(
       internal.research.decompose,
       { caseId },
       { name: "clerk.decompose" },
