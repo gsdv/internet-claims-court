@@ -10,13 +10,9 @@ import { verifyQuote } from "./lib/quotes";
 
 const firecrawl = new FirecrawlClient(components.firecrawl);
 
-// No thread history in prompts: every call is given exactly the evidence it
-// needs, and scraped pages would otherwise balloon the context.
-const noContext = {
-  contextOptions: { recentMessages: 0, searchOptions: { limit: 0 } },
-} as const;
 // Advocate prompts embed whole scraped pages; keep them out of the thread.
-const noContextNoSave = { ...noContext, storageOptions: { saveMessages: "none" } } as const;
+// (Context isolation itself is configured on each Agent in agents.ts.)
+const dontSave = { storageOptions: { saveMessages: "none" } } as const;
 
 const verdictEnum = z.enum([
   "supported",
@@ -79,7 +75,6 @@ export const decompose = internalAction({
               .max(5),
           }),
         }),
-        ...noContext,
       },
     );
     if (!output) throw new Error("Clerk returned no output");
@@ -308,8 +303,8 @@ export const argue = internalAction({
               .max(4),
           }),
         }),
-        ...noContextNoSave,
       },
+      dontSave,
     );
 
     for (const ex of output?.exhibits ?? []) {
@@ -377,7 +372,6 @@ export const audit = internalAction({
             ),
           }),
         }),
-        ...noContext,
       },
     );
     const byNumber = new Map(pending.map((e) => [e.number, e]));
@@ -461,7 +455,6 @@ export const crossExamine = internalAction({
               .max(5),
           }),
         }),
-        ...noContext,
       },
     );
     const valid = new Set(verified.map((e) => e.number));
@@ -535,7 +528,6 @@ export const judgeSubclaim = internalAction({
             keyExhibits: z.array(z.number().int()),
           }),
         }),
-        ...noContext,
       },
     );
     if (!output) throw new Error("Judge returned no output");
@@ -583,7 +575,6 @@ export const synthesize = internalAction({
             whatWouldChange: z.string(),
           }),
         }),
-        ...noContext,
       },
     );
     if (!output) throw new Error("Judge returned no output");

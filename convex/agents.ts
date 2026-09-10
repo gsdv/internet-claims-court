@@ -6,6 +6,14 @@ import { components } from "./_generated/api";
 export const RESEARCH_MODEL = openai.chat("gpt-5.4-mini");
 export const JUDGE_MODEL = openai.chat("gpt-5.4");
 
+// Every call is given exactly the evidence it needs in its prompt. Never pull
+// thread history or search results into context: advocate prompts embed whole
+// scraped pages, and one stray retrieval can push a request past OpenAI's
+// per-request token cap.
+const isolated = {
+  contextOptions: { recentMessages: 0, searchOptions: { limit: 0 } },
+} as const;
+
 const courtPreamble = `You are an officer of the Internet Claims Court, an adversarial
 fact-finding process. Today's date is ${new Date().toISOString().slice(0, 10)}.
 Your knowledge may be stale: treat the scraped web evidence you are given as
@@ -15,6 +23,7 @@ or URLs. Be concrete, terse, and specific.`;
 export const clerk = new Agent(components.agent, {
   name: "Clerk",
   languageModel: RESEARCH_MODEL,
+  ...isolated,
   instructions: `${courtPreamble}
 
 You are the Clerk. Decompose a contested claim into 3 to 5 independently
@@ -44,6 +53,7 @@ already on the record for this subclaim, so do not refile known passages.`;
 export const prosecutor = new Agent(components.agent, {
   name: "Prosecution",
   languageModel: RESEARCH_MODEL,
+  ...isolated,
   instructions: `${courtPreamble}
 
 You are the Prosecution. You argue that the subclaim is TRUE. File only
@@ -53,6 +63,7 @@ exhibits that support it. ${advocateRules}`,
 export const defender = new Agent(components.agent, {
   name: "Defense",
   languageModel: RESEARCH_MODEL,
+  ...isolated,
   instructions: `${courtPreamble}
 
 You are the Defense. You argue that the subclaim is FALSE, unproven, or
@@ -62,6 +73,7 @@ overstated. File only exhibits that undermine it. ${advocateRules}`,
 export const auditor = new Agent(components.agent, {
   name: "Auditor",
   languageModel: RESEARCH_MODEL,
+  ...isolated,
   instructions: `${courtPreamble}
 
 You are the Source Auditor. Score each exhibit's source for reliability ON THIS
@@ -79,6 +91,7 @@ One short note per exhibit explaining the score.`,
 export const crossExaminer = new Agent(components.agent, {
   name: "Cross-Examiner",
   languageModel: RESEARCH_MODEL,
+  ...isolated,
   instructions: `${courtPreamble}
 
 You are the Cross-Examiner. Attack the weakest points in the record on BOTH
@@ -98,6 +111,7 @@ merely because you disagree with its side.`,
 export const judge = new Agent(components.agent, {
   name: "Judge",
   languageModel: JUDGE_MODEL,
+  ...isolated,
   instructions: `${courtPreamble}
 
 You are the Judge. You rule only on the exhibits in the record. Weigh each
