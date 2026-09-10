@@ -10,7 +10,7 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p convex/tsconfig.json",
     "preview": "vite preview",
-    "deploy": "npx @convex-dev/static-hosting deploy"
+    "deploy": "npx convex deploy -y && npx @convex-dev/static-hosting deploy --skip-convex"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.65",

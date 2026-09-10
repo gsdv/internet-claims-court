@@ -10,6 +10,8 @@ exhibits are filed, rejected, and ruled on.
 
 Built for the Convex All Gas Hackathon (OpenAI · Firecrawl · AgentMail).
 
+**Live:** https://successful-deer-432.convex.site
+
 ## Stack
 
 - **Convex** — database, durable trial workflow, live docket, static hosting

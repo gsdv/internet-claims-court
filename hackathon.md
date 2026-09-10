@@ -3,16 +3,16 @@
 - **Project:** Internet Claims Court
 - **Event:** Convex All Gas Hackathon (OpenAI, Firecrawl, AgentMail)
 - **What it does:** Tries a contested claim in the open: a Clerk splits it into subclaims, Researchers pull live web evidence with Firecrawl, an Auditor verifies every quote against the scraped source, and a Judge rules on each subclaim and the case, all streamed to a live docket.
-- **Live app:** not deployed
-- **Repo:** none
+- **Live app:** https://successful-deer-432.convex.site
+- **Repo:** https://github.com/gsdv/internet-claims-court
 - **Frontend:** Convex static hosting
-- **Convex deployment:** https://zany-stork-195.convex.cloud
+- **Convex deployment:** https://successful-deer-432.convex.cloud
 - **Components:** @convex-dev/agent, @convex-dev/workflow, @convex-dev/static-hosting, @firecrawl/firecrawl-convex
 - **Convex features:** schema, tables, indexes, queries, mutations, actions, realtime queries, HTTP actions, workflows, registered components
 - **Auth:** none
 - **AI models:** gpt-5.4-mini (Clerk, Researcher), gpt-5.4 (Judge)
 - **Started:** 2026-09-09T21:30:18Z
-- **Last updated:** 2026-09-09T22:40:24Z
+- **Last updated:** 2026-09-09T22:52:00Z
 
 ## Log
 
@@ -40,3 +40,9 @@ exists. Broke a circular type-inference loop between the workflow and its
 actions with explicit handler return types, bounded all docket reads with
 `take`, and added a Vite launch config (`convex/research.ts`, `convex/trial.ts`,
 `convex/cases.ts`).
+
+### 2026-09-09 - working tree
+Published the app. Backend pushed to the production deployment and the Vite
+build uploaded through the static hosting component, so the docket is live at a
+public convex.site URL. Made the deploy script non-interactive
+(`package.json`). Public repository created and pushed.
