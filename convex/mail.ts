@@ -405,7 +405,7 @@ export const draftSubpoenas = internalAction({
               .max(2),
           }),
         }),
-        ...({ contextOptions: { recentMessages: 0 } } as const),
+        ...({ contextOptions: { recentMessages: 0, searchOptions: { limit: 0 } } } as const),
       },
     );
     const allowed = new Set(contacts.map((k) => k.email));

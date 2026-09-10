@@ -12,7 +12,11 @@ const firecrawl = new FirecrawlClient(components.firecrawl);
 
 // No thread history in prompts: every call is given exactly the evidence it
 // needs, and scraped pages would otherwise balloon the context.
-const noContext = { contextOptions: { recentMessages: 0 } } as const;
+const noContext = {
+  contextOptions: { recentMessages: 0, searchOptions: { limit: 0 } },
+} as const;
+// Advocate prompts embed whole scraped pages; keep them out of the thread.
+const noContextNoSave = { ...noContext, storageOptions: { saveMessages: "none" } } as const;
 
 const verdictEnum = z.enum([
   "supported",
@@ -47,6 +51,13 @@ export const decompose = internalAction({
   handler: async (ctx, { caseId }): Promise<Id<"subclaims">[]> => {
     const c: Doc<"cases"> | null = await ctx.runQuery(internal.cases.getInternal, { caseId });
     if (!c) throw new Error("case not found");
+    // A retrial after a mistrial keeps the Clerk's original docket.
+    const existing: Array<Doc<"subclaims"> & { ruling: Doc<"rulings"> | null }> =
+      await ctx.runQuery(internal.cases.subclaimsWithRulings, { caseId });
+    if (existing.length > 0) {
+      await ctx.runMutation(internal.cases.setStatus, { caseId, status: "researching" });
+      return existing.map((s) => s._id);
+    }
     await ctx.runMutation(internal.cases.setStatus, { caseId, status: "decomposing" });
 
     const { output } = await clerk.generateText(
@@ -297,7 +308,7 @@ export const argue = internalAction({
               .max(4),
           }),
         }),
-        ...noContext,
+        ...noContextNoSave,
       },
     );
 

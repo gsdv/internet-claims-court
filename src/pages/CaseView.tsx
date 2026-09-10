@@ -121,7 +121,7 @@ export default function CaseView({
             {STATUS_LINE[c.status]}
           </p>
         )}
-        {c.status === "failed" && <p className="mt-4 text-sm text-seal">Mistrial: {c.error}</p>}
+        {c.status === "failed" && <Mistrial caseId={c._id} error={c.error} />}
 
         <p className="mt-5 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-3">
           Evidence on record · {totalExhibits} exhibits from {docket.stats.sources} sources ·{" "}
@@ -172,6 +172,32 @@ export default function CaseView({
         </aside>
       </div>
     </main>
+  );
+}
+
+function Mistrial({ caseId, error }: { caseId: Id<"cases">; error?: string }) {
+  const retry = useMutation(api.cases.retry);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="mt-4 rounded-xl border border-against/40 bg-against/5 p-4 text-sm">
+      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-against">Mistrial</p>
+      <p className="mt-1 break-words text-ink-2">{(error ?? "Unknown error").slice(0, 400)}</p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await retry({ caseId });
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="mt-3 rounded-lg bg-ink px-3 py-1.5 text-sm text-paper disabled:opacity-40"
+      >
+        {busy ? "Filing…" : "Move for retrial"}
+      </button>
+    </div>
   );
 }
 

@@ -62,6 +62,35 @@ export const fileClaim = mutation({
   handler: (ctx, { claim }) => openCase(ctx, claim),
 });
 
+// After a mistrial, anyone can move for a retrial; completed steps are
+// reused (subclaims kept, duplicate exhibits rejected, rulings re-entered).
+export const retry = mutation({
+  args: { caseId: v.id("cases") },
+  returns: v.null(),
+  handler: async (ctx, { caseId }) => {
+    const c = await ctx.db.get(caseId);
+    if (!c) throw new Error("Case not found.");
+    if (c.status !== "failed") throw new Error("Only a mistrial can be retried.");
+    const now = Date.now();
+    await ctx.db.patch(caseId, { status: "filed", error: undefined, updatedAt: now });
+    await ctx.db.insert("events", {
+      caseId,
+      kind: "note",
+      actor: "Court",
+      message: "Motion for retrial granted. Resuming from the existing record.",
+      createdAt: now,
+    });
+    const workflowId = await trialWorkflow.start(
+      ctx,
+      internal.trial.trial,
+      { caseId },
+      { onComplete: internal.trial.onTrialComplete, context: { caseId } },
+    );
+    await ctx.db.patch(caseId, { workflowId });
+    return null;
+  },
+});
+
 export const listCases = query({
   args: {},
   handler: async (ctx) => {
