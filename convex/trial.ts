@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { WorkflowManager, vWorkflowId, vResultValidator } from "@convex-dev/workflow";
 import { components, internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 export const trialWorkflow = new WorkflowManager(components.workflow, {
   workpoolOptions: {
@@ -60,6 +60,7 @@ export const trial = trialWorkflow.define({
     );
 
     await step.runAction(internal.research.synthesize, { caseId }, { name: "judge.synthesize" });
+    await step.runAction(internal.mail.draftSubpoenas, { caseId }, { name: "clerk.subpoenas" });
   },
 });
 
@@ -84,9 +85,10 @@ export const onTrialComplete = internalMutation({
 export const appeal = trialWorkflow.define({
   args: { caseId: v.id("cases"), subclaimId: v.id("subclaims"), appealId: v.id("appeals") },
   handler: async (step, { caseId, subclaimId, appealId }): Promise<void> => {
-    const url: string | null = await step.runQuery(internal.cases.appealUrl, { appealId });
-    let sourceIds: Id<"sources">[] = [];
-    if (url) {
+    const a: Doc<"appeals"> | null = await step.runQuery(internal.cases.getAppeal, { appealId });
+    const url = a?.url ?? null;
+    let sourceIds: Id<"sources">[] = a?.sourceId ? [a.sourceId] : [];
+    if (url && sourceIds.length === 0) {
       const sourceId: Id<"sources"> | null = await step.runAction(
         internal.research.scrapeUrl,
         { caseId, subclaimId, url },

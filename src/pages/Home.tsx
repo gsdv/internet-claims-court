@@ -15,6 +15,7 @@ export default function Home({ navigate }: { navigate: (to: string) => void }) {
   const [error, setError] = useState<string | null>(null);
   const fileClaim = useMutation(api.cases.fileClaim);
   const cases = useQuery(api.cases.listCases);
+  const inbox = useQuery(api.mail.inboxAddress);
 
   const submit = async (text: string) => {
     setBusy(true);
@@ -75,6 +76,16 @@ export default function Home({ navigate }: { navigate: (to: string) => void }) {
           </div>
           {error && <p className="mt-2 text-sm text-seal">{error}</p>}
         </form>
+
+        {inbox && (
+          <p className="mt-3 text-sm text-ink-2">
+            Or email your claim as the subject line to{" "}
+            <a href={`mailto:${inbox}?subject=${encodeURIComponent("OpenAI solved the Navier-Stokes problem")}`} className="font-mono text-ink underline decoration-line">
+              {inbox}
+            </a>
+            . The verdict comes back by reply.
+          </p>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {EXAMPLES.map((ex) => (

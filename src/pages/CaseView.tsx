@@ -126,7 +126,10 @@ export default function CaseView({
         <p className="mt-5 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-3">
           Evidence on record · {totalExhibits} exhibits from {docket.stats.sources} sources ·{" "}
           {docket.stats.rejected} rejected by the Auditor
+          {c.filedByEmail && " · filed by email"}
         </p>
+
+        {docket.inquiries.length > 0 && <Inquiries items={docket.inquiries} />}
       </section>
 
       <div className="docket-rule my-8" />
@@ -169,6 +172,112 @@ export default function CaseView({
         </aside>
       </div>
     </main>
+  );
+}
+
+// Subpoenas: drafted by the Clerk, issued by a person, answered by email.
+function Inquiries({ items }: { items: Docket["inquiries"] }) {
+  return (
+    <div className="mt-6 max-w-3xl">
+      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-3">
+        Written inquiries · the court asks the parties
+      </p>
+      <ul className="mt-2 space-y-3">
+        {items.map((i) => (
+          <InquiryCard key={i._id} i={i} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function InquiryCard({ i }: { i: Docket["inquiries"][number] }) {
+  const [to, setTo] = useState(i.to);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const issue = useMutation(api.mail.issueSubpoena);
+  const statusLabel: Record<string, string> = {
+    draft: "Draft · awaiting a signature",
+    sent: "Issued · awaiting reply",
+    replied: "Answered · reply entered into the record",
+    failed: "Failed",
+  };
+  return (
+    <li className="rise rounded-xl border border-line bg-white/60 p-4 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-medium">
+          To {i.party}
+          <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-ink-3">
+            re: subclaim {i.subclaimIndex + 1}
+          </span>
+        </p>
+        <span
+          className={`font-mono text-[10px] uppercase tracking-wider ${
+            i.status === "replied" ? "text-for" : i.status === "sent" ? "text-gold" : "text-ink-3"
+          }`}
+        >
+          {statusLabel[i.status]}
+        </span>
+      </div>
+      <p className="mt-1 text-ink-2">{i.subject}</p>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="mt-1 font-mono text-[11px] text-ink-3 underline"
+      >
+        {open ? "Hide letter" : "Read letter"}
+      </button>
+      {open && (
+        <pre className="mt-2 whitespace-pre-wrap rounded-lg bg-paper-2 p-3 font-sans text-sm leading-relaxed text-ink-2">
+          {i.body}
+        </pre>
+      )}
+      {i.status === "draft" && (
+        <form
+          className="mt-3 flex flex-col gap-2 sm:flex-row"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setError(null);
+            try {
+              await issue({ inquiryId: i._id, to });
+            } catch (err) {
+              setError((err as Error).message.replace(/^.*Uncaught Error: /, "").split("\n")[0]);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <input
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder={i.to ? "" : "No address on record. Enter the party's email"}
+            className="flex-1 rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs outline-none focus:border-ink-3"
+          />
+          <button
+            disabled={busy || !to.includes("@")}
+            className="rounded-lg bg-ink px-3 py-2 text-sm text-paper disabled:opacity-40"
+          >
+            {busy ? "Issuing…" : "Issue subpoena"}
+          </button>
+          {error && <p className="text-xs text-seal sm:basis-full">{error}</p>}
+        </form>
+      )}
+      {i.status === "sent" && (
+        <p className="mt-2 font-mono text-[11px] text-ink-3">
+          Sent to {i.to} · {timeAgo(i.sentAt ?? i.createdAt)}
+        </p>
+      )}
+      {i.status === "replied" && i.replyText && (
+        <blockquote className="mt-3 border-l-2 border-for pl-3 text-ink">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-for">
+            Reply · {timeAgo(i.repliedAt ?? i.createdAt)}
+          </p>
+          <p className="mt-1 whitespace-pre-wrap leading-relaxed">{i.replyText.slice(0, 1200)}</p>
+        </blockquote>
+      )}
+    </li>
   );
 }
 
@@ -219,6 +328,7 @@ function dotFor(kind: string) {
     case "audit":
       return "bg-gold";
     case "appeal":
+    case "mail":
       return "bg-ink";
     case "search":
       return "bg-ink-3";

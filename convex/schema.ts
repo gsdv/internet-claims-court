@@ -31,6 +31,7 @@ export const eventKind = v.union(
   v.literal("ruling"),
   v.literal("verdict"),
   v.literal("appeal"),
+  v.literal("mail"),
   v.literal("error"),
   v.literal("note"),
 );
@@ -57,9 +58,15 @@ export default defineSchema({
     summary: v.optional(v.string()),
     whatWouldChange: v.optional(v.string()),
     error: v.optional(v.string()),
+    // Set when the case was filed by email; the verdict is sent back as a reply.
+    filingInboxId: v.optional(v.string()),
+    filingMessageId: v.optional(v.string()),
+    filingThreadId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_createdAt", ["createdAt"]),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_filingThread", ["filingThreadId"]),
 
   subclaims: defineTable({
     caseId: v.id("cases"),
@@ -129,8 +136,11 @@ export default defineSchema({
   appeals: defineTable({
     caseId: v.id("cases"),
     subclaimId: v.id("subclaims"),
+    kind: v.optional(v.union(v.literal("appeal"), v.literal("subpoena_reply"))),
     argument: v.string(),
     url: v.optional(v.string()),
+    // Pre-fetched evidence (e.g. an emailed reply) to argue from instead of a URL.
+    sourceId: v.optional(v.id("sources")),
     status: v.union(v.literal("filed"), v.literal("heard"), v.literal("failed")),
     workflowId: v.optional(v.string()),
     error: v.optional(v.string()),
@@ -138,6 +148,36 @@ export default defineSchema({
   })
     .index("by_case", ["caseId", "createdAt"])
     .index("by_subclaim", ["subclaimId"]),
+
+  // A subpoena: the court asks a real party to settle a subclaim by email.
+  // Drafted by the Clerk after the verdict; issued only when a person clicks.
+  inquiries: defineTable({
+    caseId: v.id("cases"),
+    subclaimId: v.id("subclaims"),
+    party: v.string(),
+    to: v.string(),
+    subject: v.string(),
+    body: v.string(),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("sent"),
+      v.literal("replied"),
+      v.literal("failed"),
+    ),
+    outboundId: v.optional(v.string()),
+    threadId: v.optional(v.string()),
+    replyText: v.optional(v.string()),
+    replyFrom: v.optional(v.string()),
+    appealId: v.optional(v.id("appeals")),
+    createdAt: v.number(),
+    sentAt: v.optional(v.number()),
+    repliedAt: v.optional(v.number()),
+  })
+    .index("by_case", ["caseId", "createdAt"])
+    .index("by_thread", ["threadId"]),
+
+  // Deployment-level settings (the court's inbox id and address).
+  settings: defineTable({ key: v.string(), value: v.string() }).index("by_key", ["key"]),
 
   // Subclaim rulings (subclaimId set) and case verdicts (subclaimId unset),
   // versioned so revisions are visible.

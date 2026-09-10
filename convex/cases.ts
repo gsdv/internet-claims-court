@@ -5,7 +5,9 @@ import {
   internalQuery,
   mutation,
   query,
+  type MutationCtx,
 } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { components, internal } from "./_generated/api";
 import { caseStatus, eventKind, objectionKind, side, verdict } from "./schema";
 import { trialWorkflow } from "./trial";
@@ -15,40 +17,49 @@ import { quotesOverlap } from "./lib/quotes";
 // Public API
 // ---------------------------------------------------------------------------
 
+// Opens a case and starts the durable trial. Shared by the web form and the
+// court's email inbox.
+export async function openCase(
+  ctx: MutationCtx,
+  claim: string,
+  filing?: { filingInboxId: string; filingMessageId: string; filingThreadId: string },
+): Promise<Id<"cases">> {
+  const text = claim.trim();
+  if (text.length < 8) throw new Error("Claim is too short.");
+  if (text.length > 600) throw new Error("Claim is too long (600 chars max).");
+  const now = Date.now();
+  const threadId = await createThread(ctx, components.agent, {
+    title: text.slice(0, 80),
+  });
+  const caseId = await ctx.db.insert("cases", {
+    claim: text,
+    status: "filed",
+    threadId,
+    createdAt: now,
+    updatedAt: now,
+    ...(filing ?? {}),
+  });
+  await ctx.db.insert("events", {
+    caseId,
+    kind: "filed",
+    actor: "Court",
+    message: filing ? "Case filed by email. Assigning the Clerk." : "Case filed. Assigning the Clerk.",
+    createdAt: now,
+  });
+  const workflowId = await trialWorkflow.start(
+    ctx,
+    internal.trial.trial,
+    { caseId },
+    { onComplete: internal.trial.onTrialComplete, context: { caseId } },
+  );
+  await ctx.db.patch(caseId, { workflowId });
+  return caseId;
+}
+
 export const fileClaim = mutation({
   args: { claim: v.string() },
   returns: v.id("cases"),
-  handler: async (ctx, { claim }) => {
-    const text = claim.trim();
-    if (text.length < 8) throw new Error("Claim is too short.");
-    if (text.length > 600) throw new Error("Claim is too long (600 chars max).");
-    const now = Date.now();
-    const threadId = await createThread(ctx, components.agent, {
-      title: text.slice(0, 80),
-    });
-    const caseId = await ctx.db.insert("cases", {
-      claim: text,
-      status: "filed",
-      threadId,
-      createdAt: now,
-      updatedAt: now,
-    });
-    await ctx.db.insert("events", {
-      caseId,
-      kind: "filed",
-      actor: "Court",
-      message: "Case filed. Assigning the Clerk.",
-      createdAt: now,
-    });
-    const workflowId = await trialWorkflow.start(
-      ctx,
-      internal.trial.trial,
-      { caseId },
-      { onComplete: internal.trial.onTrialComplete, context: { caseId } },
-    );
-    await ctx.db.patch(caseId, { workflowId });
-    return caseId;
-  },
+  handler: (ctx, { claim }) => openCase(ctx, claim),
 });
 
 export const listCases = query({
@@ -97,12 +108,27 @@ export const getDocket = query({
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
       .order("desc")
       .take(200);
-    const { threadId: _t, workflowId: _w, ...publicCase } = c;
+    const inquiries = await ctx.db
+      .query("inquiries")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .take(20);
+    const {
+      threadId: _t,
+      workflowId: _w,
+      filingInboxId: _fi,
+      filingMessageId: _fm,
+      filingThreadId: _ft,
+      ...publicCase
+    } = c;
     const caseRulings = rulings
       .filter((r) => r.subclaimId === undefined)
       .sort((a, b) => a.version - b.version);
     return {
-      case: publicCase,
+      case: { ...publicCase, filedByEmail: c.filingMessageId !== undefined },
+      inquiries: inquiries.map(({ outboundId: _o, threadId: _th, replyFrom: _rf, ...i }) => ({
+        ...i,
+        subclaimIndex: subclaims.find((s) => s._id === i.subclaimId)?.index ?? 0,
+      })),
       verdictHistory: caseRulings.map((r) => ({
         version: r.version,
         verdict: r.verdict,
@@ -152,47 +178,68 @@ export const fileAppeal = mutation({
         throw new Error("Evidence URL must be a valid http(s) link.");
       }
     }
-    const sub = await ctx.db.get(subclaimId);
-    if (!sub) throw new Error("Subclaim not found.");
-    const c = await ctx.db.get(sub.caseId);
-    if (!c) throw new Error("Case not found.");
-    if (c.status !== "decided") throw new Error("Wait for the current ruling before appealing.");
-    const pending = await ctx.db
-      .query("appeals")
-      .withIndex("by_case", (q) => q.eq("caseId", c._id))
-      .filter((q) => q.eq(q.field("status"), "filed"))
-      .first();
-    if (pending) throw new Error("An appeal is already being heard on this case.");
-
-    const now = Date.now();
-    const appealId = await ctx.db.insert("appeals", {
-      caseId: c._id,
-      subclaimId,
-      argument: text,
-      url: cleanUrl,
-      status: "filed",
-      createdAt: now,
-    });
-    await ctx.db.patch(c._id, { status: "researching", updatedAt: now });
-    await ctx.db.patch(subclaimId, { status: "researching" });
-    await ctx.db.insert("events", {
-      caseId: c._id,
-      subclaimId,
-      kind: "appeal",
-      actor: "Appellant",
-      message: `Appeal filed on subclaim ${sub.index + 1}${cleanUrl ? " with new evidence" : ""}. Retrial ordered.`,
-      createdAt: now,
-    });
-    const workflowId = await trialWorkflow.start(
-      ctx,
-      internal.trial.appeal,
-      { caseId: c._id, subclaimId, appealId },
-      { onComplete: internal.trial.onAppealComplete, context: { caseId: c._id, appealId } },
-    );
-    await ctx.db.patch(appealId, { workflowId });
-    return appealId;
+    return openAppeal(ctx, { subclaimId, kind: "appeal", argument: text, url: cleanUrl });
   },
 });
+
+// Reopens one subclaim for a partial retrial. Used by web appeals and by
+// subpoena replies arriving through the court's inbox.
+export async function openAppeal(
+  ctx: MutationCtx,
+  args: {
+    subclaimId: Id<"subclaims">;
+    kind: "appeal" | "subpoena_reply";
+    argument: string;
+    url?: string;
+    sourceId?: Id<"sources">;
+  },
+): Promise<Id<"appeals">> {
+  const { subclaimId, kind, argument, url, sourceId } = args;
+  const sub = await ctx.db.get(subclaimId);
+  if (!sub) throw new Error("Subclaim not found.");
+  const c = await ctx.db.get(sub.caseId);
+  if (!c) throw new Error("Case not found.");
+  if (c.status !== "decided") throw new Error("Wait for the current ruling before appealing.");
+  const pending = await ctx.db
+    .query("appeals")
+    .withIndex("by_case", (q) => q.eq("caseId", c._id))
+    .filter((q) => q.eq(q.field("status"), "filed"))
+    .first();
+  if (pending) throw new Error("An appeal is already being heard on this case.");
+
+  const now = Date.now();
+  const appealId = await ctx.db.insert("appeals", {
+    caseId: c._id,
+    subclaimId,
+    kind,
+    argument,
+    url,
+    sourceId,
+    status: "filed",
+    createdAt: now,
+  });
+  await ctx.db.patch(c._id, { status: "researching", updatedAt: now });
+  await ctx.db.patch(subclaimId, { status: "researching" });
+  await ctx.db.insert("events", {
+    caseId: c._id,
+    subclaimId,
+    kind: "appeal",
+    actor: kind === "appeal" ? "Appellant" : "Court",
+    message:
+      kind === "appeal"
+        ? `Appeal filed on subclaim ${sub.index + 1}${url ? " with new evidence" : ""}. Retrial ordered.`
+        : `Subpoena reply entered on subclaim ${sub.index + 1}. Retrial ordered.`,
+    createdAt: now,
+  });
+  const workflowId = await trialWorkflow.start(
+    ctx,
+    internal.trial.appeal,
+    { caseId: c._id, subclaimId, appealId },
+    { onComplete: internal.trial.onAppealComplete, context: { caseId: c._id, appealId } },
+  );
+  await ctx.db.patch(appealId, { workflowId });
+  return appealId;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers used by the workflow and actions
@@ -586,6 +633,7 @@ export const decide = internalMutation({
         : `Verdict: ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`,
       createdAt: now,
     });
+    if (c?.filingMessageId) await ctx.scheduler.runAfter(0, internal.mail.notifyFiler, { caseId });
   },
 });
 

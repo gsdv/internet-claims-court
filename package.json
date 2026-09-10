@@ -13,6 +13,7 @@
     "deploy": "npx convex deploy -y && npx @convex-dev/static-hosting deploy --skip-convex"
   },
   "dependencies": {
+    "@agentmail/convex": "^0.1.0",
     "@ai-sdk/openai": "^4.0.65",
     "@convex-dev/agent": "^0.7.2",
     "@convex-dev/static-hosting": "^0.2.1",
