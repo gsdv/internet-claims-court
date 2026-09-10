@@ -41,7 +41,7 @@ actions with explicit handler return types, bounded all docket reads with
 `take`, and added a Vite launch config (`convex/research.ts`, `convex/trial.ts`,
 `convex/cases.ts`).
 
-### 2026-09-09 - working tree
+### 2026-09-09 - c308e57
 Published the app. Backend pushed to the production deployment and the Vite
 build uploaded through the static hosting component, so the docket is live at a
 public convex.site URL. Made the deploy script non-interactive
