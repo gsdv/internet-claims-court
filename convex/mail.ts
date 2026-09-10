@@ -63,11 +63,11 @@ export const inboxAddress = query({
 // inbound webhook. Returns the webhook signing secret so the operator can
 // store it as AGENTMAIL_WEBHOOK_SECRET (pipe it; do not print it).
 export const setup = internalAction({
-  args: { username: v.optional(v.string()) },
+  args: { username: v.optional(v.string()), exclusive: v.optional(v.boolean()) },
   returns: v.object({ inbox: v.string(), webhookUrl: v.string(), secret: v.string() }),
   handler: async (
     ctx,
-    { username },
+    { username, exclusive },
   ): Promise<{ inbox: string; webhookUrl: string; secret: string }> => {
     let inboxId: string | null = await ctx.runQuery(internal.mail.getSetting, { key: "inboxId" });
     if (!inboxId) {
@@ -118,8 +118,26 @@ export const setup = internalAction({
       body: JSON.stringify({ url: webhookUrl, event_types: ["message.received"] }),
     });
     if (!res.ok) throw new Error(`webhook registration failed: ${res.status} ${await res.text()}`);
-    const wh = (await res.json()) as { secret?: string };
+    const wh = (await res.json()) as { secret?: string; webhook_id?: string };
     if (!wh.secret) throw new Error("webhook response had no secret");
+    // One inbox feeds one deployment: drop webhooks that point at other Convex
+    // deployments so an email is not filed twice.
+    if (exclusive !== false) {
+      const list = await fetch("https://api.agentmail.to/v0/webhooks?limit=50", {
+        headers: { Authorization: `Bearer ${env.AGENTMAIL_API_KEY}` },
+      });
+      if (list.ok) {
+        const data = (await list.json()) as { webhooks?: Array<{ webhook_id: string; url: string }> };
+        for (const w of data.webhooks ?? []) {
+          if (w.webhook_id === wh.webhook_id) continue;
+          if (!w.url.includes(".convex.site/")) continue;
+          await fetch(`https://api.agentmail.to/v0/webhooks/${w.webhook_id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${env.AGENTMAIL_API_KEY}` },
+          });
+        }
+      }
+    }
     return { inbox: inboxId, webhookUrl, secret: wh.secret };
   },
 });

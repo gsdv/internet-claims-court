@@ -7,12 +7,12 @@
 - **Repo:** https://github.com/gsdv/internet-claims-court
 - **Frontend:** Convex static hosting
 - **Convex deployment:** https://successful-deer-432.convex.cloud
-- **Components:** @convex-dev/agent, @convex-dev/workflow, @convex-dev/static-hosting, @firecrawl/firecrawl-convex
-- **Convex features:** schema, tables, indexes, queries, mutations, actions, realtime queries, HTTP actions, workflows, registered components
+- **Components:** @convex-dev/agent, @convex-dev/workflow, @convex-dev/static-hosting, @firecrawl/firecrawl-convex, @agentmail/convex
+- **Convex features:** schema, tables, indexes, queries, mutations, actions, realtime queries, HTTP actions, scheduled functions, workflows, registered components
 - **Auth:** none
-- **AI models:** gpt-5.4-mini (Clerk, Researcher), gpt-5.4 (Judge)
+- **AI models:** gpt-5.4-mini (Clerk, Prosecution, Defense, Auditor, Cross-Examiner), gpt-5.4 (Judge)
 - **Started:** 2026-09-09T21:30:18Z
-- **Last updated:** 2026-09-10T04:55:00Z
+- **Last updated:** 2026-09-10T18:05:00Z
 
 ## Log
 
@@ -67,3 +67,28 @@ Tested end to end on the dev deployment: first appeal on the Navier-Stokes case
 fetched a TechCrunch report, added 5 exhibits, drew 4 objections, and the Judge
 affirmed with reasons addressed to the appellant. Convex features: workflows,
 actions, mutations, realtime queries, components.
+
+### 2026-09-10 - 4463dc5
+Gave the court an inbox. The AgentMail component is mounted and its
+Svix-verified webhook is served at `/api/agentmail/webhook`
+(`convex/http.ts`, `convex/mail.ts`). File by email: a message to the court
+inbox with the claim in the subject opens a case, starts the trial workflow,
+replies with the docket link, and the verdict is sent back on the same thread
+when the Judge rules (a scheduled mutation after `decide` in
+`convex/cases.ts`). Subpoenas: after each verdict the Clerk drafts up to two
+written inquiries to the party best placed to settle an unresolved subclaim,
+addressed only to an email that appears verbatim in the scraped evidence at
+that party's own domain, otherwise left blank; nothing is sent until a person
+clicks Issue on the docket. A reply is matched to its inquiry by thread,
+entered into the record as a source, and reopens the subclaim through the
+same partial-retrial workflow that appeals use. A one-time setup action
+adopts the inbox and registers the webhook (the API key is inbox-scoped, so
+inbox creation is not possible and one inbox serves one deployment).
+Two mistrials on a real emailed filing traced to the Agent component's thread
+search pulling earlier page-laden prompts into later calls, blowing past
+OpenAI's per-request token cap; context isolation now lives on each Agent
+constructor and advocate prompts are not saved to the thread. Added a
+"Move for retrial" path that resumes a mistrial from the existing record.
+Verified on the dev deployment: an emailed claim was docketed, acknowledged,
+tried, and answered with the verdict by reply. Convex features: HTTP actions,
+scheduled functions, mutations, workflows, components.

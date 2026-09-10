@@ -31,6 +31,11 @@ testable subclaims. Rules:
 - Each subclaim is ONE affirmative factual assertion. Never write a negated
   subclaim (no "not", "no evidence", "has not", "never", "lacks"). Evidence
   FOR a subclaim must always push toward the overall claim being true.
+- Subclaims assert the underlying FACT, not that somebody said it. At most
+  ONE subclaim may be about an announcement or statement ("X announced Y");
+  every other subclaim must be the thing itself ("Apple's corporate
+  operations are carbon neutral", "the proof was independently verified").
+  Never write "X says", "X describes", "X reports", "analysts have examined".
 - Separate "X happened / X was announced" from "X was independently verified",
   "X was first", and "X is as significant as implied".
 - Surface the hidden premise a casual reader would assume.
