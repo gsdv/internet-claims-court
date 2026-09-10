@@ -23,6 +23,18 @@ const VERDICT_STYLE: Record<Verdict, string> = {
   unsupported: "bg-against text-paper",
 };
 
+const VERDICT_DOT: Record<Verdict, string> = {
+  supported: "bg-for",
+  mostly_supported: "bg-for/70",
+  unresolved: "bg-gold",
+  misleading: "bg-against/70",
+  unsupported: "bg-against",
+};
+
+export function verdictDot(verdict?: Verdict) {
+  return verdict ? VERDICT_DOT[verdict] : "bg-line";
+}
+
 export function VerdictBadge({
   verdict,
   confidence,

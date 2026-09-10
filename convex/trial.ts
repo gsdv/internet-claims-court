@@ -12,8 +12,9 @@ export const trialWorkflow = new WorkflowManager(components.workflow, {
   },
 });
 
-// The durable trial: decompose -> research each subclaim in parallel ->
-// rule on each subclaim -> synthesize the case verdict. Each step is recorded,
+// The durable trial: decompose -> for each subclaim in parallel (gather pages,
+// Prosecution and Defense file in parallel, Auditor scores, Cross-Examiner
+// objects, Judge rules) -> synthesize the case verdict. Every step is recorded,
 // so a crash or redeploy resumes from the last incomplete step.
 export const trial = trialWorkflow.define({
   args: { caseId: v.id("cases") },
@@ -25,21 +26,37 @@ export const trial = trialWorkflow.define({
     );
 
     await Promise.all(
-      subclaimIds.map((subclaimId, i) =>
-        step
-          .runAction(
-            internal.research.research,
-            { caseId, subclaimId },
-            { name: `researcher.subclaim${i + 1}` },
-          )
-          .then(() =>
-            step.runAction(
-              internal.research.judgeSubclaim,
-              { caseId, subclaimId },
-              { name: `judge.subclaim${i + 1}` },
-            ),
+      subclaimIds.map(async (subclaimId, i) => {
+        const n = i + 1;
+        const sourceIds: Id<"sources">[] = await step.runAction(
+          internal.research.gather,
+          { caseId, subclaimId },
+          { name: `clerk.gather.${n}` },
+        );
+        await Promise.all([
+          step.runAction(
+            internal.research.argue,
+            { caseId, subclaimId, sourceIds, side: "for" },
+            { name: `prosecution.${n}` },
           ),
-      ),
+          step.runAction(
+            internal.research.argue,
+            { caseId, subclaimId, sourceIds, side: "against" },
+            { name: `defense.${n}` },
+          ),
+        ]);
+        await step.runAction(internal.research.audit, { caseId, subclaimId }, { name: `auditor.${n}` });
+        await step.runAction(
+          internal.research.crossExamine,
+          { caseId, subclaimId },
+          { name: `crossExaminer.${n}` },
+        );
+        await step.runAction(
+          internal.research.judgeSubclaim,
+          { caseId, subclaimId },
+          { name: `judge.${n}` },
+        );
+      }),
     );
 
     await step.runAction(internal.research.synthesize, { caseId }, { name: "judge.synthesize" });
@@ -59,5 +76,68 @@ export const onTrialComplete = internalMutation({
       status: "failed",
       error: result.kind === "failed" ? result.error : "Trial was canceled",
     });
+  },
+});
+
+// Partial retrial: only the appealed subclaim is re-argued, re-audited,
+// re-examined and re-ruled; then the case verdict is re-synthesized.
+export const appeal = trialWorkflow.define({
+  args: { caseId: v.id("cases"), subclaimId: v.id("subclaims"), appealId: v.id("appeals") },
+  handler: async (step, { caseId, subclaimId, appealId }): Promise<void> => {
+    const url: string | null = await step.runQuery(internal.cases.appealUrl, { appealId });
+    let sourceIds: Id<"sources">[] = [];
+    if (url) {
+      const sourceId: Id<"sources"> | null = await step.runAction(
+        internal.research.scrapeUrl,
+        { caseId, subclaimId, url },
+        { name: "clerk.scrapeAppeal" },
+      );
+      if (sourceId) sourceIds = [sourceId];
+    }
+    if (sourceIds.length > 0) {
+      await Promise.all([
+        step.runAction(
+          internal.research.argue,
+          { caseId, subclaimId, sourceIds, side: "for", appealId },
+          { name: "prosecution.appeal" },
+        ),
+        step.runAction(
+          internal.research.argue,
+          { caseId, subclaimId, sourceIds, side: "against", appealId },
+          { name: "defense.appeal" },
+        ),
+      ]);
+      await step.runAction(internal.research.audit, { caseId, subclaimId }, { name: "auditor.appeal" });
+    }
+    await step.runAction(
+      internal.research.crossExamine,
+      { caseId, subclaimId },
+      { name: "crossExaminer.appeal" },
+    );
+    await step.runAction(
+      internal.research.judgeSubclaim,
+      { caseId, subclaimId, appealId },
+      { name: "judge.appeal" },
+    );
+    await step.runAction(internal.research.synthesize, { caseId }, { name: "judge.resynthesize" });
+    await step.runMutation(internal.cases.setAppealStatus, { appealId, status: "heard" });
+  },
+});
+
+export const onAppealComplete = internalMutation({
+  args: {
+    workflowId: vWorkflowId,
+    result: vResultValidator,
+    context: v.object({ caseId: v.id("cases"), appealId: v.id("appeals") }),
+  },
+  handler: async (ctx, { result, context }) => {
+    if (result.kind === "success") return;
+    await ctx.runMutation(internal.cases.setAppealStatus, {
+      appealId: context.appealId,
+      status: "failed",
+      error: result.kind === "failed" ? result.error : "Appeal was canceled",
+    });
+    // Put the case back into a decided state so the docket is not stuck.
+    await ctx.runMutation(internal.cases.setStatus, { caseId: context.caseId, status: "decided" });
   },
 });

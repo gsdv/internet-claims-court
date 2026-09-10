@@ -7,8 +7,9 @@ import {
   query,
 } from "./_generated/server";
 import { components, internal } from "./_generated/api";
-import { caseStatus, eventKind, side, verdict } from "./schema";
+import { caseStatus, eventKind, objectionKind, side, verdict } from "./schema";
 import { trialWorkflow } from "./trial";
+import { quotesOverlap } from "./lib/quotes";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -83,21 +84,46 @@ export const getDocket = query({
       .query("rulings")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
       .take(200);
+    const objections = await ctx.db
+      .query("objections")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .take(200);
+    const appeals = await ctx.db
+      .query("appeals")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .take(50);
     const events = await ctx.db
       .query("events")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))
       .order("desc")
       .take(200);
     const { threadId: _t, workflowId: _w, ...publicCase } = c;
+    const caseRulings = rulings
+      .filter((r) => r.subclaimId === undefined)
+      .sort((a, b) => a.version - b.version);
     return {
       case: publicCase,
-      subclaims: subclaims.map((s) => ({
-        ...s,
-        exhibits: exhibits.filter((e) => e.subclaimId === s._id),
-        ruling: rulings
-          .filter((r) => r.subclaimId === s._id)
-          .sort((a, b) => b.version - a.version)[0],
+      verdictHistory: caseRulings.map((r) => ({
+        version: r.version,
+        verdict: r.verdict,
+        confidence: r.confidence,
+        createdAt: r.createdAt,
       })),
+      subclaims: subclaims.map((s) => {
+        const mine = rulings
+          .filter((r) => r.subclaimId === s._id)
+          .sort((a, b) => b.version - a.version);
+        return {
+          ...s,
+          exhibits: exhibits.filter((e) => e.subclaimId === s._id),
+          objections: objections.filter((o) => o.subclaimId === s._id),
+          ruling: mine[0],
+          priorRulings: mine.slice(1),
+          appeals: appeals
+            .filter((a) => a.subclaimId === s._id)
+            .map(({ workflowId: _wf, ...a }) => a),
+        };
+      }),
       events,
       stats: {
         for: exhibits.filter((e) => e.side === "for" && e.verified).length,
@@ -109,9 +135,184 @@ export const getDocket = query({
   },
 });
 
+export const fileAppeal = mutation({
+  args: { subclaimId: v.id("subclaims"), argument: v.string(), url: v.optional(v.string()) },
+  returns: v.id("appeals"),
+  handler: async (ctx, { subclaimId, argument, url }) => {
+    const text = argument.trim();
+    if (text.length < 10) throw new Error("Give the court an argument (10+ characters).");
+    if (text.length > 1500) throw new Error("Argument is too long (1500 chars max).");
+    let cleanUrl: string | undefined;
+    if (url && url.trim()) {
+      try {
+        const u = new URL(url.trim());
+        if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error();
+        cleanUrl = u.toString();
+      } catch {
+        throw new Error("Evidence URL must be a valid http(s) link.");
+      }
+    }
+    const sub = await ctx.db.get(subclaimId);
+    if (!sub) throw new Error("Subclaim not found.");
+    const c = await ctx.db.get(sub.caseId);
+    if (!c) throw new Error("Case not found.");
+    if (c.status !== "decided") throw new Error("Wait for the current ruling before appealing.");
+    const pending = await ctx.db
+      .query("appeals")
+      .withIndex("by_case", (q) => q.eq("caseId", c._id))
+      .filter((q) => q.eq(q.field("status"), "filed"))
+      .first();
+    if (pending) throw new Error("An appeal is already being heard on this case.");
+
+    const now = Date.now();
+    const appealId = await ctx.db.insert("appeals", {
+      caseId: c._id,
+      subclaimId,
+      argument: text,
+      url: cleanUrl,
+      status: "filed",
+      createdAt: now,
+    });
+    await ctx.db.patch(c._id, { status: "researching", updatedAt: now });
+    await ctx.db.patch(subclaimId, { status: "researching" });
+    await ctx.db.insert("events", {
+      caseId: c._id,
+      subclaimId,
+      kind: "appeal",
+      actor: "Appellant",
+      message: `Appeal filed on subclaim ${sub.index + 1}${cleanUrl ? " with new evidence" : ""}. Retrial ordered.`,
+      createdAt: now,
+    });
+    const workflowId = await trialWorkflow.start(
+      ctx,
+      internal.trial.appeal,
+      { caseId: c._id, subclaimId, appealId },
+      { onComplete: internal.trial.onAppealComplete, context: { caseId: c._id, appealId } },
+    );
+    await ctx.db.patch(appealId, { workflowId });
+    return appealId;
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Internal helpers used by the workflow and actions
 // ---------------------------------------------------------------------------
+
+export const getSources = internalQuery({
+  args: { sourceIds: v.array(v.id("sources")) },
+  handler: async (ctx, { sourceIds }) => {
+    const docs = await Promise.all(sourceIds.map((id) => ctx.db.get(id)));
+    return docs.filter((d): d is NonNullable<typeof d> => d !== null);
+  },
+});
+
+export const getAppeal = internalQuery({
+  args: { appealId: v.id("appeals") },
+  handler: (ctx, { appealId }) => ctx.db.get(appealId),
+});
+
+export const appealUrl = internalQuery({
+  args: { appealId: v.id("appeals") },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { appealId }) => (await ctx.db.get(appealId))?.url ?? null,
+});
+
+export const setAppealStatus = internalMutation({
+  args: {
+    appealId: v.id("appeals"),
+    status: v.union(v.literal("filed"), v.literal("heard"), v.literal("failed")),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, { appealId, status, error }) => {
+    await ctx.db.patch(appealId, { status, ...(error ? { error } : {}) });
+    if (status === "failed") {
+      const a = await ctx.db.get(appealId);
+      if (a)
+        await ctx.db.insert("events", {
+          caseId: a.caseId,
+          subclaimId: a.subclaimId,
+          kind: "error",
+          actor: "Court",
+          message: `Appeal could not be heard: ${error ?? "unknown error"}`,
+          createdAt: Date.now(),
+        });
+    }
+  },
+});
+
+export const objectionsForSubclaim = internalQuery({
+  args: { subclaimId: v.id("subclaims") },
+  handler: (ctx, { subclaimId }) =>
+    ctx.db
+      .query("objections")
+      .withIndex("by_subclaim", (q) => q.eq("subclaimId", subclaimId))
+      .take(50),
+});
+
+export const latestRuling = internalQuery({
+  args: { subclaimId: v.id("subclaims") },
+  handler: (ctx, { subclaimId }) =>
+    ctx.db
+      .query("rulings")
+      .withIndex("by_subclaim", (q) => q.eq("subclaimId", subclaimId))
+      .order("desc")
+      .first(),
+});
+
+export const scoreExhibit = internalMutation({
+  args: { exhibitId: v.id("exhibits"), sourceScore: v.number(), sourceScoreNote: v.string() },
+  handler: async (ctx, { exhibitId, ...rest }) => {
+    await ctx.db.patch(exhibitId, rest);
+  },
+});
+
+// Cross-examination is re-run on retrial; the previous round is replaced.
+export const replaceObjections = internalMutation({
+  args: {
+    caseId: v.id("cases"),
+    subclaimId: v.id("subclaims"),
+    objections: v.array(
+      v.object({
+        exhibitNumber: v.number(),
+        kind: objectionKind,
+        text: v.string(),
+        severity: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, { caseId, subclaimId, objections }) => {
+    const old = await ctx.db
+      .query("objections")
+      .withIndex("by_subclaim", (q) => q.eq("subclaimId", subclaimId))
+      .take(50);
+    const round = (old[old.length - 1]?.round ?? 0) + 1;
+    for (const o of old) await ctx.db.delete(o._id);
+    const now = Date.now();
+    for (const o of objections) {
+      await ctx.db.insert("objections", { caseId, subclaimId, round, createdAt: now, ...o });
+      await ctx.db.insert("events", {
+        caseId,
+        subclaimId,
+        exhibitNumber: o.exhibitNumber,
+        kind: "objection",
+        actor: "Cross-Examiner",
+        message: `Objection to Ex. ${o.exhibitNumber} (${o.kind.replace(/_/g, " ")}, severity ${o.severity}): ${o.text}`,
+        createdAt: now,
+      });
+    }
+    if (objections.length === 0) {
+      const sub = await ctx.db.get(subclaimId);
+      await ctx.db.insert("events", {
+        caseId,
+        subclaimId,
+        kind: "note",
+        actor: "Cross-Examiner",
+        message: `No objections to the record on subclaim ${(sub?.index ?? 0) + 1}.`,
+        createdAt: now,
+      });
+    }
+  },
+});
 
 export const getInternal = internalQuery({
   args: { caseId: v.id("cases") },
@@ -258,6 +459,7 @@ export const insertExhibit = internalMutation({
     verified: v.boolean(),
     verificationNote: v.string(),
     filedBy: v.string(),
+    appealId: v.optional(v.id("appeals")),
   },
   handler: async (ctx, args) => {
     const last = await ctx.db
@@ -266,17 +468,31 @@ export const insertExhibit = internalMutation({
       .order("desc")
       .first();
     const number = (last?.number ?? 0) + 1;
-    await ctx.db.insert("exhibits", { ...args, number });
+    // The Clerk refuses a quote already on the record for this subclaim, so
+    // counsel cannot pad their side by refiling the other side's evidence.
+    let { verified, verificationNote } = args;
+    if (verified) {
+      const existing = await ctx.db
+        .query("exhibits")
+        .withIndex("by_subclaim", (q) => q.eq("subclaimId", args.subclaimId))
+        .take(50);
+      const dup = existing.find((e) => e.verified && quotesOverlap(e.quote, args.quote));
+      if (dup) {
+        verified = false;
+        verificationNote = `Duplicate of Exhibit ${dup.number} (${dup.side === args.side ? "same side" : "filed by " + dup.filedBy})`;
+      }
+    }
+    await ctx.db.insert("exhibits", { ...args, verified, verificationNote, number });
     const host = safeHost(args.url);
     await ctx.db.insert("events", {
       caseId: args.caseId,
       subclaimId: args.subclaimId,
       exhibitNumber: number,
-      kind: args.verified ? "exhibit" : "exhibit_rejected",
-      actor: args.verified ? args.filedBy : "Auditor",
-      message: args.verified
+      kind: verified ? "exhibit" : "exhibit_rejected",
+      actor: verified ? args.filedBy : verificationNote.startsWith("Duplicate") ? "Clerk" : "Auditor",
+      message: verified
         ? `Exhibit ${number} filed ${args.side === "for" ? "FOR" : "AGAINST"} from ${host}`
-        : `Exhibit ${number} from ${host} rejected: ${args.verificationNote}`,
+        : `Exhibit ${number} (${args.filedBy}, ${host}) rejected: ${verificationNote}`,
       createdAt: Date.now(),
     });
   },
@@ -286,6 +502,7 @@ export const insertRuling = internalMutation({
   args: {
     caseId: v.id("cases"),
     subclaimId: v.id("subclaims"),
+    appealId: v.optional(v.id("appeals")),
     verdict,
     confidence: v.number(),
     reasoning: v.string(),
@@ -311,7 +528,12 @@ export const insertRuling = internalMutation({
       subclaimId: args.subclaimId,
       kind: "ruling",
       actor: "Judge",
-      message: `Subclaim ${(sub?.index ?? 0) + 1} ruled ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`,
+      message:
+        prev && prev.verdict !== args.verdict
+          ? `On appeal, subclaim ${(sub?.index ?? 0) + 1} REVISED from ${label(prev.verdict)} to ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`
+          : prev
+            ? `On appeal, subclaim ${(sub?.index ?? 0) + 1} AFFIRMED ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`
+            : `Subclaim ${(sub?.index ?? 0) + 1} ruled ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`,
       createdAt: Date.now(),
     });
   },
@@ -327,13 +549,42 @@ export const decide = internalMutation({
   },
   handler: async (ctx, args) => {
     const { caseId, ...rest } = args;
-    await ctx.db.patch(caseId, { ...rest, status: "decided", updatedAt: Date.now() });
+    const c = await ctx.db.get(caseId);
+    const prevVerdict = c?.verdict;
+    const prevRuling = await ctx.db
+      .query("rulings")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .filter((q) => q.eq(q.field("subclaimId"), undefined))
+      .order("desc")
+      .first();
+    const now = Date.now();
+    await ctx.db.insert("rulings", {
+      caseId,
+      version: (prevRuling?.version ?? 0) + 1,
+      verdict: args.verdict,
+      confidence: args.confidence,
+      reasoning: args.summary,
+      whatWouldChange: args.whatWouldChange,
+      keyExhibits: [],
+      createdAt: now,
+    });
+    await ctx.db.patch(caseId, { ...rest, status: "decided", updatedAt: now });
+    for (const s of await ctx.db
+      .query("subclaims")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .take(20)) {
+      if (s.status !== "decided") await ctx.db.patch(s._id, { status: "decided" });
+    }
     await ctx.db.insert("events", {
       caseId,
       kind: "verdict",
       actor: "Judge",
-      message: `Verdict: ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`,
-      createdAt: Date.now(),
+      message: prevVerdict
+        ? prevVerdict !== args.verdict
+          ? `Verdict REVISED from ${label(prevVerdict)} to ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`
+          : `Verdict AFFIRMED: ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`
+        : `Verdict: ${label(args.verdict)} at ${Math.round(args.confidence)}% confidence`,
+      createdAt: now,
     });
   },
 });
